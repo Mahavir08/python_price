@@ -1,25 +1,64 @@
-name: Price Check
+name: Price Scraper - Every 6 Hours
 
+# Runs every 6 hours (at 00:00, 06:00, 12:00, 18:00 UTC)
 on:
   schedule:
-    - cron: "0 */6 * * *" # every hour
-  workflow_dispatch: # manual trigger
+    - cron: "*/5 * * * *" # Every 5 Minutes for testing purpose
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
-  run-script:
+  scrape-prices:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
 
-      - name: Set up Python
+    steps:
+      # Step 1: Checkout your code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Setup Python environment
+      - name: Setup Python 3.10
         uses: actions/setup-python@v4
         with:
-          python-version: "3.13"
+          python-version: "3.10"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      # Step 3: Cache pip dependencies for faster runs
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-      - name: Run script
+      # Step 4: Install Chrome and ChromeDriver for Selenium
+      - name: Install Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+
+      # Step 5: Install ChromeDriver
+      - name: Install ChromeDriver
+        run: |
+          CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d '.' -f 1)
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0.6778.204/linux64/chromedriver-linux64.zip"
+          unzip -q chromedriver-linux64.zip
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/chromedriver
+          chromedriver --version
+
+      # Step 6: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium
+          pip install -r requirements.txt
+
+      # Step 7: Run the scraper script
+      - name: Run price scraper
         env:
           COIN: ${{ secrets.COIN }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -27,4 +66,19 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: py Check_Price.py
+          # Add any other secrets your script needs
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          python main.py
+
+      # Step 8: Upload logs if they exist (optional)
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: error-logs-${{ github.run_number }}
+          path: |
+            *.log
+            logs/
+          retention-days: 7
+          if-no-files-found: ignore
