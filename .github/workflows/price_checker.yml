@@ -52,7 +52,7 @@ jobs:
 
       # Step 4 & 5: Install Chrome & ChromeDriver
       - name: Install Chrome and ChromeDriver
-        uses: nanasess/setup-chromedriver@v5
+        uses: nanasess/setup-chromedriver@v2
 
       # Step 6: Install Python dependencies
       - name: Install Python dependencies
