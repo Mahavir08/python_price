@@ -32,23 +32,74 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # Step 4: Install Chrome and ChromeDriver for Selenium
-      - name: Install Chrome
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget unzip
-          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+      # # Step 4: Install Chrome and ChromeDriver for Selenium
+      # - name: Install Chrome
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y wget unzip
+      #     wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+      #     sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
 
-      # Step 5: Install ChromeDriver
-      - name: Install ChromeDriver
+      # # Step 5: Install ChromeDriver
+      # - name: Install ChromeDriver
+      #   run: |
+      #     CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d '.' -f 1)
+      #     wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0.6778.204/linux64/chromedriver-linux64.zip"
+      #     unzip -q chromedriver-linux64.zip
+      #     sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+      #     sudo chmod +x /usr/local/bin/chromedriver
+      #     chromedriver --version
+
+      # Step 4: Install Chrome and ChromeDriver for Selenium (robust)
+      - name: Install Google Chrome
         run: |
-          CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d '.' -f 1)
-          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}.0.6778.204/linux64/chromedriver-linux64.zip"
-          unzip -q chromedriver-linux64.zip
-          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget unzip ca-certificates gnupg
+          # install Google Chrome .deb (works on ubuntu-latest)
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb
+          # sanity check: print available chrome binary and version
+          which google-chrome || which google-chrome-stable || which chromium || true
+          (google-chrome --version || google-chrome-stable --version || chromium --version) || true
+
+      - name: Install ChromeDriver (match major Chrome version, fallback to latest)
+        run: |
+          set -euo pipefail
+          # find a chrome binary
+          CHROME_BIN=$(which google-chrome 2>/dev/null || which google-chrome-stable 2>/dev/null || which chromium 2>/dev/null || true)
+          if [ -z "$CHROME_BIN" ]; then
+            echo "ERROR: No Chrome/Chromium binary found. Aborting."
+            exit 1
+          fi
+          echo "Using Chrome binary: $CHROME_BIN"
+
+          # get full version and major version
+          FULL_VER=$("$CHROME_BIN" --version | awk '{print $3}')
+          echo "Chrome full version: $FULL_VER"
+          MAJOR_VER=$(echo "$FULL_VER" | cut -d'.' -f1)
+          echo "Chrome major version: $MAJOR_VER"
+
+          # ask Google Storage for the matching chromedriver release for this major version
+          LATEST_DRIVER=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${MAJOR_VER}" || true)
+
+          if [ -z "$LATEST_DRIVER" ]; then
+            echo "No matching chromedriver for major $MAJOR_VER. Falling back to LATEST_RELEASE (latest available)."
+            LATEST_DRIVER=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE")
+          fi
+
+          echo "Chromedriver version to download: $LATEST_DRIVER"
+
+          # download, unzip and install
+          TMPDIR=$(mktemp -d)
+          cd "$TMPDIR"
+          wget -q "https://chromedriver.storage.googleapis.com/${LATEST_DRIVER}/chromedriver_linux64.zip" -O chromedriver_linux64.zip
+          unzip -q chromedriver_linux64.zip
+          sudo mv -f chromedriver /usr/local/bin/chromedriver
           sudo chmod +x /usr/local/bin/chromedriver
-          chromedriver --version
+
+          # verify
+          /usr/local/bin/chromedriver --version || true
 
       # Step 6: Install Python dependencies
       - name: Install Python dependencies
