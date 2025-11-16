@@ -61,6 +61,19 @@ jobs:
           pip install selenium
           pip install -r requirements.txt
 
+      # Step 6.5: Get the locality of the server
+      - name: 🗺️ Check Runner Locality
+        id: locality_check
+        run: |
+          # Use ipinfo.io to get the runner's geographic data
+          GEO_DATA=$(curl -s https://ipinfo.io/json)
+          COUNTRY=$(echo "$GEO_DATA" | jq -r '.country')
+          REGION=$(echo "$GEO_DATA" | jq -r '.region')
+          CITY=$(echo "$GEO_DATA" | jq -r '.city')
+
+          echo "Runner is currently located in: $CITY, $REGION, $COUNTRY"
+          echo "country=$COUNTRY" >> $GITHUB_OUTPUT
+
       # Step 7: Run the scraper script
       - name: Run price scraper
         env:
