@@ -63,42 +63,85 @@ jobs:
           which google-chrome || which google-chrome-stable || which chromium || true
           (google-chrome --version || google-chrome-stable --version || chromium --version) || true
 
-      - name: Install ChromeDriver (match major Chrome version, fallback to latest)
+      - name: Install ChromeDriver (supports new Chrome-for-Testing layout)
         run: |
           set -euo pipefail
-          # find a chrome binary
+
+          # find chrome binary
           CHROME_BIN=$(which google-chrome 2>/dev/null || which google-chrome-stable 2>/dev/null || which chromium 2>/dev/null || true)
           if [ -z "$CHROME_BIN" ]; then
-            echo "ERROR: No Chrome/Chromium binary found. Aborting."
+            echo "ERROR: No Chrome/Chromium binary found."
             exit 1
           fi
           echo "Using Chrome binary: $CHROME_BIN"
 
-          # get full version and major version
           FULL_VER=$("$CHROME_BIN" --version | awk '{print $3}')
           echo "Chrome full version: $FULL_VER"
           MAJOR_VER=$(echo "$FULL_VER" | cut -d'.' -f1)
           echo "Chrome major version: $MAJOR_VER"
 
-          # ask Google Storage for the matching chromedriver release for this major version
-          LATEST_DRIVER=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${MAJOR_VER}" || true)
+          # Install jq for JSON parsing (jq small and useful)
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
-          if [ -z "$LATEST_DRIVER" ]; then
-            echo "No matching chromedriver for major $MAJOR_VER. Falling back to LATEST_RELEASE (latest available)."
-            LATEST_DRIVER=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE")
+          # Try Chrome-for-Testing JSON API (preferred for newer releases)
+          API_URL="https://googlechromelabs.github.io/chrome-for-testing/known-good-builds.json"
+          echo "Querying Chrome-for-Testing API..."
+          JSON=$(curl -sS "$API_URL" || true)
+
+          # try exact full-version match -> linux64 chromedriver url
+          CHROMEDRIVER_URL=$(echo "$JSON" | jq -r --arg V "$FULL_VER" '
+            .[] | select(.version==$V) |
+            .downloads.chromedriver[]? | select(.platform=="linux64") | .url' 2>/dev/null || true)
+
+          # if no exact match, try any entry starting with the major version (e.g. "142.")
+          if [ -z "$CHROMEDRIVER_URL" ] || [ "$CHROMEDRIVER_URL" = "null" ]; then
+            echo "No exact version found in chrome-for-testing; searching by major version..."
+            CHROMEDRIVER_URL=$(echo "$JSON" | jq -r --arg MAJ "${MAJOR_VER}." '
+              .[] | select(.version | startswith($MAJ)) |
+              .downloads.chromedriver[]? | select(.platform=="linux64") | .url' | head -n1 2>/dev/null || true)
           fi
 
-          echo "Chromedriver version to download: $LATEST_DRIVER"
+          # If still empty, fall back to legacy chromedriver.storage.googleapis.com method (older mapping)
+          if [ -z "$CHROMEDRIVER_URL" ] || [ "$CHROMEDRIVER_URL" = "null" ]; then
+            echo "chrome-for-testing lookup failed — falling back to chromedriver.storage.googleapis.com LATEST_RELEASE_{major} method..."
+            LATEST_DRIVER=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${MAJOR_VER}" || true)
+            if [ -z "$LATEST_DRIVER" ]; then
+              echo "No LATEST_RELEASE for major $MAJOR_VER, trying overall latest..."
+              LATEST_DRIVER=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE" || true)
+            fi
+            if [ -n "$LATEST_DRIVER" ]; then
+              CHROMEDRIVER_URL="https://chromedriver.storage.googleapis.com/${LATEST_DRIVER}/chromedriver_linux64.zip"
+            fi
+          fi
 
-          # download, unzip and install
+          if [ -z "$CHROMEDRIVER_URL" ] || [ "$CHROMEDRIVER_URL" = "null" ]; then
+            echo "ERROR: Could not locate chromedriver for Chrome $FULL_VER (major $MAJOR_VER)."
+            echo "Tried Chrome-for-Testing API ($API_URL) and chromedriver.storage.googleapis.com."
+            exit 1
+          fi
+
+          echo "Chromedriver URL: $CHROMEDRIVER_URL"
+
           TMPDIR=$(mktemp -d)
           cd "$TMPDIR"
-          wget -q "https://chromedriver.storage.googleapis.com/${LATEST_DRIVER}/chromedriver_linux64.zip" -O chromedriver_linux64.zip
-          unzip -q chromedriver_linux64.zip
-          sudo mv -f chromedriver /usr/local/bin/chromedriver
-          sudo chmod +x /usr/local/bin/chromedriver
+          curl -sS -L "$CHROMEDRIVER_URL" -o chromedriver.zip
+          unzip -q chromedriver.zip || { echo "unzip failed"; ls -la; exit 1; }
 
-          # verify
+          # the archive may contain a folder or just the binary; handle both cases
+          if [ -f chromedriver ]; then
+            sudo mv -f chromedriver /usr/local/bin/chromedriver
+          else
+            # try to find chromedriver anywhere under TMPDIR
+            BIN=$(find . -type f -name chromedriver -print -quit || true)
+            if [ -z "$BIN" ]; then
+              echo "ERROR: chromedriver binary not found in archive"
+              ls -la
+              exit 1
+            fi
+            sudo mv -f "$BIN" /usr/local/bin/chromedriver
+          fi
+          sudo chmod +x /usr/local/bin/chromedriver
           /usr/local/bin/chromedriver --version || true
 
       # Step 6: Install Python dependencies
