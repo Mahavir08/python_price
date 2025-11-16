@@ -159,7 +159,7 @@ def check_price():
             # email_body += f"-------------------- {each_site['name']} --------------------\n"
             # email_body += "Element not found\n\n"
             print("Element not found")
-    # send_email(html_body)
+    send_email(html_body)
     driver.quit()
 
 
